@@ -4,13 +4,28 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.ensemble import AdaBoostClassifier
 from sklearn.svm import SVC
 
+from general_utils.numpy import safe_insert_string
+
+
+DEFAULT_ESTIMATOR = SVC(gamma='scale')
+DEFAULT_REJECTED_CLASS_INTEGER = -1
+DEFAULT_REJECTED_CLASS_STRING = "rejected"
+
 
 class GuardedClassifier(BaseEstimator, ClassifierMixin):
     # Should this be a module level global?  Hard coded in _validate_estimator?  Or is this ok as is?
-    DEFAULT_ESTIMATOR = SVC()
-    DEFAULT_REJECTED_CLASS = -1
 
     def __init__(self, base_estimator=None, min_records_in_class=30, rejected_class=None):
+        """
+        FEATURE: Docstring to be added
+
+        Args:
+            base_estimator:
+            min_records_in_class:
+            rejected_class: (ADD NOTE ABOUT HOW REJECTED_CLASS WILL TRY TO INFER BUT IF THAT OVERLAPS A CLASS IT WILL
+                            RAISE.  ALSO MENTION HOW NUMBERS WILL BE CAST TO STRINGS IF y IS LABEL STRINGS AND
+                            REJECTED_CLASS IS A NUMBER)
+        """
         self.min_records_in_class = min_records_in_class
         self.base_estimator = base_estimator
         self.rejected_class = rejected_class
@@ -82,7 +97,12 @@ class GuardedClassifier(BaseEstimator, ClassifierMixin):
         y_pred = y_pred_unguarded.copy()
 
         for name in self.rejected_classes_:
-            y_pred[y_pred_unguarded == name] = self.rejected_class
+            if y_pred.dtype.char == 'U':
+                # If unicode class names, use safe_insert_string(), which will increase the y_pred.dtype unicode length
+                # if required to avoid truncating self.rejected_class_
+                y_pred = safe_insert_string(y_pred, y_pred_unguarded == name, self.rejected_class_)
+            else:
+                y_pred[y_pred_unguarded == name] = self.rejected_class_
 
         if return_unguarded:
             return y_pred, y_pred_unguarded
@@ -116,7 +136,7 @@ class GuardedClassifier(BaseEstimator, ClassifierMixin):
         if self.base_estimator is not None:
             self.base_estimator_ = self.base_estimator
         else:
-            self.base_estimator_ = self.DEFAULT_ESTIMATOR
+            self.base_estimator_ = DEFAULT_ESTIMATOR
 
     def _validate_rejected_class(self, y):
         """
@@ -130,13 +150,38 @@ class GuardedClassifier(BaseEstimator, ClassifierMixin):
         Returns:
             None
         """
+        # Get y's type as it will cast into a numpy array
+        y_array = np.asarray(y)
+        y_type = type(y_array.reshape(-1)[0])
+
         if self.rejected_class is None:
             # Get the type of the y array, then make a rejected_class_ that is of that type
             # This feels fragile - is there a better way?  Can asarray cause a type change that will break everything?
-            y_type = type(np.asarray(y).reshape(-1)[0])
-            self.rejected_class_ = y_type(self.DEFAULT_REJECTED_CLASS)
+            try:
+                temp_rejected_class = y_type(DEFAULT_REJECTED_CLASS_STRING)
+            except ValueError:
+                temp_rejected_class = y_type(DEFAULT_REJECTED_CLASS_INTEGER)
+
+            if temp_rejected_class in y_array:
+                raise ValueError("Default rejected_class name is present in y.  To force rejected_class to a known "
+                                 "class, rejected_class must be defined explicitly (not left as default to be inferred)"
+                                 " in order to avoid mistaken reassignment to existing classes")
         else:
-            self.rejected_class_ = self.rejected_class
+            temp_rejected_class = self.rejected_class
+
+        # Test if rejected_class can be injected into an array of y's without breaking
+        y_like = np.empty([1], dtype=y_array.dtype)
+        try:
+            if y_like.dtype.char == 'U':
+                y_like = safe_insert_string(y_like, 0, temp_rejected_class)
+            else:
+                y_like[0] = temp_rejected_class
+        except ValueError:
+            raise ValueError(f"rejected_class ({self.rejected_class} of type {type(self.rejected_class)} must be of"
+                             f" the same type as y (of type {y_type}) or one that can automatically cast to that type")
+
+        # Use the recast value from y_like for future rejected_class_ usage (this way it is always cast properly)
+        self.rejected_class_ = y_like[0]
 
     @staticmethod
     def _compute_counts(y):

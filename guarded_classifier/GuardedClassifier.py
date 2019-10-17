@@ -1,7 +1,6 @@
 import numpy as np
 
 from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.ensemble import AdaBoostClassifier
 from sklearn.svm import SVC
 
 from general_utils.numpy import safe_insert_string
@@ -13,30 +12,33 @@ DEFAULT_REJECTED_CLASS_STRING = "rejected"
 
 
 class GuardedClassifier(BaseEstimator, ClassifierMixin):
-    # Should this be a module level global?  Hard coded in _validate_estimator?  Or is this ok as is?
 
     def __init__(self, base_estimator=None, min_records_in_class=30, rejected_class=None):
         """
-        FEATURE: Docstring to be added
+        An sklearn-compliant meta classifier that won't return predictions for classes with few training samples
+
+        The intent behind the classifier is to make use of data that has poorly represented classes without actually
+        outwardly classifying to those classes.  The hope is that it might better represent the uncertain categories
+        than an approach that just puts all those classes into a single rejected class directly (one that would
+        inherently be disjointed).
+
+        For any class trained that has more than min_records_in_class, the classifier behaves normally as expected.  For
+        classes trained on fewer than min_records_in_class examples, the classifier will still try to predict to those
+        classes internally but will never return those low-example predictions.  Instead, those predictions will be
+        returned in the rejected_class
 
         Args:
-            base_estimator:
-            min_records_in_class:
-            rejected_class: (ADD NOTE ABOUT HOW REJECTED_CLASS WILL TRY TO INFER BUT IF THAT OVERLAPS A CLASS IT WILL
-                            RAISE.  ALSO MENTION HOW NUMBERS WILL BE CAST TO STRINGS IF y IS LABEL STRINGS AND
-                            REJECTED_CLASS IS A NUMBER)
+            base_estimator: An sklearn-compliant multi-class estimator
+            min_records_in_class (int): Number of training records below which a class will be redirected to the
+                                        rejected_class
+            rejected_class (str or int): Classname to assign all rejected classes to.  If None, will try to infer a
+                                         suitable class name of appropriate type that matches other class types
+                                         (integer or string, depending on y passed to train).  Inference, however, is
+                                         not robust and specifying this is recommended.
         """
         self.min_records_in_class = min_records_in_class
         self.base_estimator = base_estimator
         self.rejected_class = rejected_class
-
-        # # Shorthand for setting all params using inspect
-        # # Pulled from danielhnyk.cz
-        # import inspect
-        # args, _, _, values = inspect.getargvalues(inspect.currentframe())
-        # values.pop("self")
-        # for arg, val in values.items():
-        #     setattr(self, arg, val)
 
     def fit(self, X, y, n_records=None):
         """
